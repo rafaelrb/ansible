@@ -1,0 +1,28 @@
+---
+- name: setup master
+  hosts: masters
+  tasks:
+    - copy: 
+        src: script/hash.sh
+        dest: /tmp/hash.sh
+        owner: root
+        mode: 0755
+      become: yes
+    - copy: 
+        src: script/token.sh
+        dest: /tmp/token.sh
+        owner: root
+        mode: 0755
+      become: yes
+
+
+    - command: /tmp/hash.sh
+      register: hash
+      become: yes
+    - command: /tmp/token.sh
+      register: token
+      become: yes
+
+    - debug: msg="{{hash.stdout}}"
+    - debug: msg="{{token.stdout}}"
+

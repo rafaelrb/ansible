@@ -1,0 +1,146 @@
+---
+- name: Kubeadm cluster setup
+  hosts: all
+  tasks:
+  - name: File /etc/hosts
+    copy:
+      src: etc/hosts
+      dest: /etc/hosts
+      owner: root
+      mode: 0644
+    become: yes
+  - name: SSH files
+    copy:
+      src: ssh/{{ item }}
+      dest: ~/.ssh/{{ item }}
+      owner: ubuntu
+      group: ubuntu
+      mode: 0600
+    with_items:
+      - id_rsa
+      - authorized_keys
+      - id_rsa.pub
+
+  - name: Some packages
+    apt:
+      name: "{{ packages }}"
+      state: latest
+    vars:
+      packages:
+      - apt-transport-https
+      - curl
+      - docker.io
+      state: present
+    become: yes
+  - name: Kubeadm repository
+    apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+    become: yes
+  - apt_key:
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg 
+      state: present
+    become: yes
+  - apt:
+      update_cache: yes
+    become: yes
+  - name: kubeadm, kubectl and kubelet
+    apt:
+      name: "{{ packages }}"
+      state: present
+    vars:
+      packages:
+      - kubelet
+      - kubeadm
+      - kubectl
+    become: yes
+  - systemd:
+      name: kubelet.service
+      state: started
+    become: yes
+  - systemd:
+      name: docker.service
+      state: started
+    become: yes
+
+- name: setup master
+  hosts: masters
+  tasks:
+    - name: Kubeadm init
+      command: kubeadm init --pod-network-cidr=192.168.0.0/16 
+      register: mytoken
+      become: yes
+
+    - file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+
+    - copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/ubuntu/.kube/config
+        owner: ubuntu
+        group: ubuntu
+        remote_src: yes
+      become: yes
+
+    - copy: 
+        src: script/{{item}}
+        dest: /tmp/{{item}}
+        owner: root
+        mode: 0755
+      become: yes
+      with_items:
+      - token.sh
+      - hash.sh
+      - getip.sh
+      - callico.sh
+      - rbac-kdd.yaml
+      - callico.yaml
+
+    - command: /tmp/hash.sh
+      register: hash
+      become: yes
+    - command: /tmp/token.sh
+      register: mytoken
+    - command: /tmp/getip.sh
+      register: masterip
+      become: yes
+    - command: /tmp/callico.sh
+      become: yes
+      ignore_errors: true
+    - copy:
+        content: "#!/bin/bash\n\nkubeadm join {{ masterip.stdout }}:6443 --token {{ mytoken.stdout }} --discovery-token-ca-cert-hash sha256:{{ hash.stdout }}\n"
+        dest: /tmp/join.sh
+        owner: root
+        mode: 0755
+      become: yes
+
+    - debug: msg="{{hash.stdout}}"
+    - debug: msg="{{mytoken}}"
+    - debug: msg="{{masterip.stdout}}"
+
+- name: Setup nodes
+  hosts: nodes
+  tasks:
+    - command: scp -oStrictHostKeyChecking=no master:/tmp/join.sh /tmp/join.sh
+      ignore_errors: true
+    - file:
+       path: /tmp/join.sh
+       owner: root
+       group: root
+       mode: 0755
+      become: yes
+    - command: /tmp/join.sh
+      become: yes
+      ignore_errors: true
+    - file:
+       path: /tmp/join.sh
+       owner: root
+       group: root
+       mode: 0755
+       state: absent
+      become: yes
+
+
